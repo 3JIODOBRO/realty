@@ -697,3 +697,16 @@ function bindSupport(){
 render();
 })();
 </script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+  const SUPABASE_URL = 'https://nsakbliyojncjmuhcgyk.supabase.co';
+  const SUPABASE_KEY = 'sb_publishable_n6JTS6hPTys5roUpXG6Unw_IhWzEO0M';
+  const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+  async function checkConnection() {
+    const { data, error } = await db.from('listings').select('*');
+    if (error) alert('Ошибка: ' + error.message);
+    else alert('Подключено! Объявлений в базе: ' + data.length);
+  }
+  checkConnection();
+</script>
