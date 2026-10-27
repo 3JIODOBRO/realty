@@ -80,6 +80,7 @@ async function loadListings() {
       ${l.price ? `<b>Цена: ${esc(l.price)}</b>` : ''}
       ${l.address ? `<div>📍 ${esc(l.address)}</div>` : ''}
       <p>${esc(l.description)}</p>
+            <a href="index.html?listing=${l.id}" style="display:inline-block;background:#1d6b52;color:#fff;padding:8px 14px;border-radius:8px;text-decoration:none">💬 Написать автору</a>
     </div>`).join('');
 }
 
