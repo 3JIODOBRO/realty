@@ -1,0 +1,263 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [postgis]
+}
+
+enum Role {
+  USER
+  SUPPORT
+  ADMIN
+}
+
+enum ListingType {
+  SALE
+  RENT
+}
+
+enum ListingStatus {
+  DRAFT
+  ACTIVE
+  RESERVED
+  CLOSED
+}
+
+enum ParticipantRole {
+  BUYER // tenant / buyer
+  SELLER // landlord / seller
+  SUPPORT
+}
+
+enum ConversationStatus {
+  OPEN
+  ARCHIVED
+  BLOCKED
+}
+
+/// A chat here is a deal workspace: besides text, messages carry structured actions.
+enum MessageKind {
+  TEXT
+  ATTACHMENT
+  MEETING_REQUEST // buyer → seller: showing / meeting / reservation with time slots
+  OFFER // seller → buyer: price, deposit, term, move-in date, conditions
+  SYSTEM // reminders, safety tips, status changes
+}
+
+enum ModerationVerdict {
+  ALLOW
+  WARN
+  BLOCK
+}
+
+enum AttachmentKind {
+  PHOTO
+  DOCUMENT
+}
+
+enum AttachmentStatus {
+  PENDING
+  READY
+  REJECTED
+}
+
+enum ReportReason {
+  SPAM
+  FRAUD
+  PHISHING
+  OFFENSIVE
+  HARASSMENT
+  FAKE_LISTING
+  DISCRIMINATION
+  OTHER
+}
+
+enum ReportStatus {
+  OPEN
+  IN_REVIEW
+  RESOLVED
+  DISMISSED
+}
+
+model User {
+  id          String    @id @default(cuid())
+  email       String    @unique
+  name        String
+  avatarUrl   String?
+  role        Role      @default(USER)
+  blockedAt   DateTime?
+  blockReason String?
+  createdAt   DateTime  @default(now())
+
+  listings       Listing[]
+  participants   ConversationParticipant[]
+  messages       Message[]                 @relation("sender")
+  templates      QuickReplyTemplate[]
+  reportsFiled   Report[]                  @relation("reporter")
+  reportsAgainst Report[]                  @relation("reportedUser")
+  reportsHandled Report[]                  @relation("resolver")
+  notifications  Notification[]
+}
+
+model Listing {
+  id          String        @id @default(cuid())
+  ownerId     String
+  owner       User          @relation(fields: [ownerId], references: [id])
+  type        ListingType
+  status      ListingStatus @default(ACTIVE)
+  title       String
+  description String
+  price       Decimal       @db.Decimal(14, 2)
+  currency    String        @default("USD")
+  rentPeriod  String? // "month" | "day"
+  areaM2      Float
+  rooms       Int
+  address     String
+  city        String
+  lat         Float
+  lng         Float
+  /// Kept in sync with lat/lng; GiST index in prisma/sql/postgis.sql
+  location    Unsupported("geography(Point,4326)")?
+  photos      String[]
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  conversations Conversation[]
+
+  @@index([city, type, status])
+}
+
+model Conversation {
+  id                String             @id @default(cuid())
+  listingId         String
+  listing           Listing            @relation(fields: [listingId], references: [id])
+  buyerId           String
+  status            ConversationStatus @default(OPEN)
+  lastMessageAt     DateTime           @default(now())
+  /// Who owes the next reply; drives reminders.
+  awaitingReplyFrom ParticipantRole?
+  awaitingSince     DateTime?
+  createdAt         DateTime           @default(now())
+
+  participants ConversationParticipant[]
+  messages     Message[]
+  attachments  Attachment[]
+  reports      Report[]
+
+  @@unique([listingId, buyerId])
+  @@index([lastMessageAt])
+}
+
+/// Read/delivery receipts are stored as per-participant cursors instead of per-message rows:
+/// status(message) = read if counterpart.lastReadAt >= createdAt, delivered if lastDeliveredAt >= createdAt.
+model ConversationParticipant {
+  id              String          @id @default(cuid())
+  conversationId  String
+  conversation    Conversation    @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  userId          String
+  user            User            @relation(fields: [userId], references: [id])
+  role            ParticipantRole
+  lastDeliveredAt DateTime?
+  lastReadAt      DateTime?
+  joinedAt        DateTime        @default(now())
+
+  @@unique([conversationId, userId])
+  @@index([userId])
+}
+
+model Message {
+  id              String            @id @default(cuid())
+  conversationId  String
+  conversation    Conversation      @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderId        String?
+  sender          User?             @relation("sender", fields: [senderId], references: [id])
+  kind            MessageKind       @default(TEXT)
+  body            String?
+  /// MEETING_REQUEST / OFFER / SYSTEM structured data
+  payload         Json?
+  /// Client-generated id for idempotent retries
+  clientId        String?
+  verdict         ModerationVerdict @default(ALLOW)
+  moderationFlags String[]
+  hiddenAt        DateTime?
+  createdAt       DateTime          @default(now())
+
+  attachments Attachment[]
+  reports     Report[]
+
+  @@unique([senderId, clientId])
+  @@index([conversationId, createdAt])
+}
+
+model Attachment {
+  id             String           @id @default(cuid())
+  conversationId String
+  conversation   Conversation     @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  messageId      String?
+  message        Message?         @relation(fields: [messageId], references: [id])
+  uploaderId     String
+  kind           AttachmentKind
+  fileName       String
+  mimeType       String
+  sizeBytes      Int
+  s3Key          String           @unique
+  status         AttachmentStatus @default(PENDING)
+  createdAt      DateTime         @default(now())
+
+  @@index([conversationId, kind])
+}
+
+model Report {
+  id             String       @id @default(cuid())
+  reporterId     String
+  reporter       User         @relation("reporter", fields: [reporterId], references: [id])
+  reportedUserId String
+  reportedUser   User         @relation("reportedUser", fields: [reportedUserId], references: [id])
+  conversationId String?
+  conversation   Conversation? @relation(fields: [conversationId], references: [id])
+  messageId      String?
+  message        Message?     @relation(fields: [messageId], references: [id])
+  reason         ReportReason
+  comment        String?
+  status         ReportStatus @default(OPEN)
+  /// true when raised automatically by the moderation system
+  automated      Boolean      @default(false)
+  resolvedById   String?
+  resolvedBy     User?        @relation("resolver", fields: [resolvedById], references: [id])
+  resolution     String?
+  createdAt      DateTime     @default(now())
+  resolvedAt     DateTime?
+
+  @@index([status, createdAt])
+  @@index([reportedUserId])
+}
+
+model QuickReplyTemplate {
+  id         String   @id @default(cuid())
+  ownerId    String
+  owner      User     @relation(fields: [ownerId], references: [id])
+  title      String
+  /// Supports {{buyerName}} {{listingTitle}} {{price}} {{address}} {{sellerName}}
+  body       String
+  category   String?
+  usageCount Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  @@index([ownerId])
+}
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id])
+  type      String
+  data      Json
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, readAt])
+}
