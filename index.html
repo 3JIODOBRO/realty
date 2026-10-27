@@ -751,4 +751,58 @@ render();
   });
 })();
 </script>
+<script>
+(function () {
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
+  const wrap = document.createElement('section');
+  wrap.style.cssText = 'max-width:800px;margin:30px auto;padding:16px;font-family:sans-serif;background:#fff;color:#000;border-radius:12px';
+  wrap.innerHTML = `
+    <h2>Объявления</h2>
+    <div style="display:grid;gap:6px;margin-bottom:20px">
+      <input id="lTitle" placeholder="Заголовок (например, 2-комн. квартира)" style="padding:8px">
+      <input id="lPrice" type="number" placeholder="Цена" style="padding:8px">
+      <input id="lAddress" placeholder="Адрес" style="padding:8px">
+      <input id="lPhoto" placeholder="Ссылка на фото (необязательно)" style="padding:8px">
+      <textarea id="lDesc" placeholder="Описание" style="padding:8px"></textarea>
+      <button id="lAdd" style="padding:10px">Добавить объявление</button>
+    </div>
+    <div id="lList">Загрузка...</div>`;
+  document.body.appendChild(wrap);
+
+  async function loadListings() {
+    const list = document.getElementById('lList');
+    const { data, error } = await db.from('listings').select('*').order('created_at', { ascending: false });
+    if (error) { list.textContent = 'Ошибка: ' + error.message; return; }
+    if (!data.length) { list.textContent = 'Пока нет объявлений'; return; }
+    list.innerHTML = data.map(l => `
+      <div style="border:1px solid #ddd;border-radius:10px;padding:10px;margin-bottom:10px">
+        ${l.photo_url ? `<img src="${esc(l.photo_url)}" style="width:100%;max-height:250px;object-fit:cover;border-radius:8px">` : ''}
+        <h3 style="margin:6px 0">${esc(l.title)}</h3>
+        ${l.price ? `<b>Цена: ${esc(l.price)}</b>` : ''}
+        ${l.address ? `<div>📍 ${esc(l.address)}</div>` : ''}
+        <p>${esc(l.description)}</p>
+      </div>`).join('');
+  }
+
+  async function addListing() {
+    const { data: { user } } = await db.auth.getUser();
+    if (!user) { alert('Сначала войдите или зарегистрируйтесь'); return; }
+    const title = document.getElementById('lTitle').value.trim();
+    if (!title) { alert('Введите заголовок'); return; }
+    const { error } = await db.from('listings').insert({
+      title,
+      price: Number(document.getElementById('lPrice').value) || null,
+      address: document.getElementById('lAddress').value.trim(),
+      photo_url: document.getElementById('lPhoto').value.trim() || null,
+      description: document.getElementById('lDesc').value.trim()
+    });
+    if (error) { alert('Ошибка: ' + error.message); return; }
+    ['lTitle','lPrice','lAddress','lPhoto','lDesc'].forEach(id => document.getElementById(id).value = '');
+    loadListings();
+  }
+
+  document.getElementById('lAdd').onclick = addListing;
+  loadListings();
+})();
+</script>
